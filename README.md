@@ -227,4 +227,4 @@ No tests yet. Contributions welcome.
 
 ## License
 
-GPL-3.0-or-later. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

@@ -1,0 +1,1 @@
+(blamer :fetcher github :repo "fvi-att/blamer-emacs")
