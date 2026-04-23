@@ -31,11 +31,12 @@
 ;; of each chunk shows the blame prefix, the rest receive a blank
 ;; spacer of the same width so the source code stays aligned.
 ;;
-;; The inline prefix is intentionally small (just date + commit summary)
-;; and a per-commit background color identifies chunk boundaries at a
-;; glance.  When point enters a blamed line, a child-frame popup (or
-;; echo area on TTY) shows the full commit detail: author, full
-;; timestamp, 12-char hash and summary.
+;; The inline prefix defaults to a small date + author layout,
+;; but its visible columns can be customized.  A per-commit background
+;; color identifies chunk boundaries at a glance.  When point enters a
+;; blamed line, a child-frame popup (or echo area on TTY) shows the
+;; full commit detail: author, full timestamp, 12-char hash and
+;; summary.
 ;;
 ;; Usage:
 ;;
@@ -51,44 +52,63 @@
 (require 'subr-x)
 (require 'color)
 
+(defun blamer--refresh-active-buffers ()
+  "Refresh all live buffers with `blamer-mode' enabled."
+  (when (fboundp 'blamer--refresh)
+    (dolist (buffer (buffer-list))
+      (with-current-buffer buffer
+        (when (bound-and-true-p blamer-mode)
+          (blamer--refresh))))))
+
+(defun blamer--set-and-refresh (symbol value)
+  "Set SYMBOL to VALUE, then refresh active blamer buffers."
+  (set-default symbol value)
+  (blamer--refresh-active-buffers))
+
 (defgroup blamer nil
   "Show git blame info grouped by chunk."
   :group 'tools
   :prefix "blamer-")
 
-(defcustom blamer-author-max-length 5
-  "Maximum display width of the author column."
-  :type 'integer
-  :group 'blamer)
-
-(defcustom blamer-comment-max-length 10
-  "Maximum display width of the commit summary column."
-  :type 'integer
-  :group 'blamer)
-
 (defcustom blamer-hash-length 6
-  "Number of characters of the commit hash to show."
+  "Maximum number of characters of the inline commit hash to show."
   :type 'integer
+  :set #'blamer--set-and-refresh
   :group 'blamer)
 
 (defcustom blamer-date-format "%y-%m-%d"
   "`format-time-string' spec used for the blame date column."
   :type 'string
+  :set #'blamer--set-and-refresh
+  :group 'blamer)
+
+(defcustom blamer-inline-columns '(date author)
+  "Ordered list of columns shown in the inline blame prefix.
+Supported column symbols are `author', `date', `summary' and `hash'."
+  :type '(repeat
+          (choice (const :tag "Author" author)
+                  (const :tag "Date" date)
+                  (const :tag "Summary" summary)
+                  (const :tag "Hash" hash)))
+  :set #'blamer--set-and-refresh
   :group 'blamer)
 
 (defcustom blamer-uncommitted-label "Uncommitted"
   "Author label used for lines not yet committed."
   :type 'string
+  :set #'blamer--set-and-refresh
   :group 'blamer)
 
 (defcustom blamer-uncommitted-summary "(not yet committed)"
   "Summary shown for lines not yet committed."
   :type 'string
+  :set #'blamer--set-and-refresh
   :group 'blamer)
 
 (defcustom blamer-separator " │ "
   "String used to separate the blame prefix from the source line."
   :type 'string
+  :set #'blamer--set-and-refresh
   :group 'blamer)
 
 (defcustom blamer-idle-delay 0.3
@@ -166,8 +186,15 @@ light themes."
 (defvar-local blamer--refresh-timer nil
   "Pending idle timer for `blamer--refresh'.")
 
+(defvar-local blamer--layout-cache nil
+  "Cached visible-layout signature for the current buffer.")
+
 (defconst blamer--zero-hash (make-string 40 ?0)
   "Pseudo hash git uses for uncommitted lines.")
+
+(defun blamer--uncommitted-p (commit)
+  "Return non-nil when COMMIT represents an uncommitted line."
+  (equal (plist-get commit :hash) blamer--zero-hash))
 
 (defun blamer--commit-background (hash)
   "Return a stable hex color for HASH, or nil for uncommitted lines."
@@ -188,13 +215,6 @@ light themes."
          (eq 0 (call-process "git" nil nil nil
                              "rev-parse" "--is-inside-work-tree")))))
 
-(defun blamer--truncate (str width)
-  "Truncate STR to WIDTH display columns, adding an ellipsis when cut."
-  (let ((str (or str "")))
-    (if (<= (string-width str) width)
-        str
-      (truncate-string-to-width str width 0 nil "…"))))
-
 (defun blamer--pad (str width)
   "Pad STR with trailing spaces to WIDTH display columns."
   (let ((w (string-width str)))
@@ -206,36 +226,87 @@ light themes."
   "Return the fixed display width of a formatted blame date."
   (string-width (format-time-string blamer-date-format 0)))
 
-(defun blamer--prefix-width ()
-  "Return the total display width of a rendered blame prefix."
-  (+ (blamer--date-width) 1
-     blamer-comment-max-length
-     (string-width blamer-separator)))
-
-(defun blamer--format (commit)
-  "Render COMMIT plist as a compact inline prefix: DATE + SUMMARY."
+(defun blamer--format-inline-column (column commit)
+  "Render inline COLUMN for COMMIT at full natural width."
   (let* ((hash (plist-get commit :hash))
-         (uncommitted (equal hash blamer--zero-hash))
-         (time (plist-get commit :author-time))
-         (summary (if uncommitted
-                      blamer-uncommitted-summary
-                    (or (plist-get commit :summary) "")))
-         (date-str (if (and time (not uncommitted))
-                       (format-time-string blamer-date-format time)
-                     (make-string (blamer--date-width) ?\s)))
-         (comment-str (blamer--pad
-                       (blamer--truncate summary blamer-comment-max-length)
-                       blamer-comment-max-length)))
-    (concat
-     (propertize date-str 'face 'blamer-date-face)
-     " "
-     (propertize comment-str 'face 'blamer-comment-face)
-     (propertize blamer-separator 'face 'blamer-separator-face))))
+         (uncommitted (blamer--uncommitted-p commit))
+         (time (plist-get commit :author-time)))
+    (pcase column
+      ('author
+       (propertize
+        (if uncommitted
+            blamer-uncommitted-label
+          (or (plist-get commit :author) ""))
+        'face 'blamer-author-face))
+      ('date
+       (if (and time (not uncommitted))
+           (propertize
+            (format-time-string blamer-date-format time)
+            'face 'blamer-date-face)
+         ""))
+      ('summary
+       (propertize
+        (if uncommitted
+            blamer-uncommitted-summary
+          (or (plist-get commit :summary) ""))
+        'face 'blamer-comment-face))
+      ('hash
+       (if uncommitted
+           ""
+         (propertize
+          (substring hash 0 (min blamer-hash-length (length hash)))
+          'face 'blamer-hash-face)))
+      (_ ""))))
+
+(defun blamer--inline-columns (commit)
+  "Return the configured inline columns for COMMIT."
+  (mapcar (lambda (column)
+            (cons column (blamer--format-inline-column column commit)))
+          blamer-inline-columns))
+
+(defun blamer--inline-widths (columns)
+  "Return the actual display widths for rendered COLUMNS alist."
+  (mapcar (lambda (column)
+            (cons column (string-width (or (alist-get column columns) ""))))
+          blamer-inline-columns))
+
+(defun blamer--column-widths-for (overlays)
+  "Return max display widths per configured column across OVERLAYS."
+  (let ((widths (mapcar (lambda (column) (cons column 0))
+                        blamer-inline-columns)))
+    (dolist (ov overlays widths)
+      (dolist (entry (overlay-get ov 'blamer-column-widths))
+        (let ((col (car entry)))
+          (when (assq col widths)
+            (setf (alist-get col widths 0 nil #'eq)
+                  (max (cdr entry)
+                       (alist-get col widths 0 nil #'eq)))))))))
+
+(defun blamer--format-prefix (columns widths &optional blank)
+  "Render inline prefix from COLUMNS aligned to WIDTHS.
+When BLANK is non-nil, render only spacing with the same total width."
+  (let ((parts nil))
+    (dolist (column blamer-inline-columns)
+      (let ((target-width (alist-get column widths 0 nil #'eq)))
+        (when (> target-width 0)
+          (push (if blank
+                    (make-string target-width ?\s)
+                  (blamer--pad (or (alist-get column columns) "")
+                               target-width))
+                parts))))
+    (setq parts (nreverse parts))
+    (if parts
+        (concat (string-join parts " ")
+                (if blank
+                    (make-string (string-width blamer-separator) ?\s)
+                  (propertize blamer-separator
+                              'face 'blamer-separator-face)))
+      "")))
 
 (defun blamer--format-detail (commit)
   "Return a multi-line human-readable COMMIT summary for the popup."
   (let* ((hash (plist-get commit :hash))
-         (uncommitted (equal hash blamer--zero-hash))
+         (uncommitted (blamer--uncommitted-p commit))
          (author (if uncommitted
                      blamer-uncommitted-label
                    (or (plist-get commit :author) "?")))
@@ -255,10 +326,47 @@ light themes."
                  'face 'shadow) "\n"
      summary)))
 
-(defun blamer--empty-prefix ()
-  "Return a blank spacer with the same display width as a blame prefix."
-  (propertize (make-string (blamer--prefix-width) ?\s)
-              'face 'blamer-face))
+(defun blamer--visible-overlays (window)
+  "Return blamer overlays visible in WINDOW."
+  (seq-filter
+   (lambda (ov) (overlay-get ov 'blamer))
+   (overlays-in (window-start window)
+                (or (window-end window t)
+                    (point-max)))))
+
+(defun blamer--set-overlay-string (overlay widths)
+  "Apply aligned before-string to OVERLAY using visible WIDTHS."
+  (let* ((columns (overlay-get overlay 'blamer-columns))
+         (detail (overlay-get overlay 'help-echo))
+         (bg (overlay-get overlay 'blamer-background))
+         (string (blamer--format-prefix
+                  columns widths
+                  (not (overlay-get overlay 'blamer-show-prefix)))))
+    (when (> (length string) 0)
+      (add-face-text-property 0 (length string) 'blamer-face t string)
+      (put-text-property 0 (length string) 'help-echo detail string)
+      (when bg
+        (add-face-text-property 0 (length string)
+                                `(:background ,bg)
+                                nil string)))
+    (overlay-put overlay 'before-string string)))
+
+(defun blamer--update-visible-layout (&optional window)
+  "Align visible blamer prefixes for WINDOW.
+When WINDOW is nil, use the selected window if it shows the current buffer."
+  (let ((window (or window
+                    (and (eq (window-buffer (selected-window))
+                             (current-buffer))
+                         (selected-window)))))
+    (when (and (window-live-p window)
+               (eq (window-buffer window) (current-buffer)))
+      (let* ((overlays (blamer--visible-overlays window))
+             (widths (blamer--column-widths-for overlays))
+             (signature (list window blamer-inline-columns widths)))
+        (unless (equal signature blamer--layout-cache)
+          (dolist (overlay overlays)
+            (blamer--set-overlay-string overlay widths))
+          (setq blamer--layout-cache signature))))))
 
 (defun blamer--parse-porcelain ()
   "Parse `git blame --porcelain' output in the current temp buffer.
@@ -302,23 +410,28 @@ duplicate mode activations are also removed."
     (dolist (ov (overlays-in (point-min) (point-max)))
       (when (overlay-get ov 'blamer)
         (delete-overlay ov))))
-  (setq blamer--overlays nil))
+  (setq blamer--overlays nil
+        blamer--layout-cache nil))
 
-(defun blamer--add-overlay (lineno string commit)
-  "Attach STRING as a `before-string' overlay at line LINENO.
-COMMIT is stored on the overlay so the detail popup can look it up,
-and also attached to STRING as `help-echo' text for mouse tooltips."
+(defun blamer--add-overlay (lineno commit show-prefix)
+  "Attach a blamer overlay at line LINENO for COMMIT.
+SHOW-PREFIX is non-nil when this line starts a visible blame chunk."
   (save-excursion
     (goto-char (point-min))
     (forward-line (1- lineno))
     (let ((ov (make-overlay (line-beginning-position)
                             (line-beginning-position)
                             nil t nil))
-          (detail (blamer--format-detail commit)))
-      (put-text-property 0 (length string) 'help-echo detail string)
-      (overlay-put ov 'before-string string)
+          (detail (blamer--format-detail commit))
+          (bg (blamer--commit-background (plist-get commit :hash)))
+          (columns (blamer--inline-columns commit)))
+      (overlay-put ov 'before-string "")
       (overlay-put ov 'blamer t)
       (overlay-put ov 'blamer-commit commit)
+      (overlay-put ov 'blamer-columns columns)
+      (overlay-put ov 'blamer-column-widths (blamer--inline-widths columns))
+      (overlay-put ov 'blamer-show-prefix show-prefix)
+      (overlay-put ov 'blamer-background bg)
       (overlay-put ov 'help-echo detail)
       (push ov blamer--overlays))))
 
@@ -329,15 +442,8 @@ and also attached to STRING as `help-echo' text for mouse tooltips."
       (let* ((lineno (car entry))
              (commit (cdr entry))
              (hash (plist-get commit :hash))
-             (bg (blamer--commit-background hash))
-             (text (if (equal hash prev-hash)
-                       (blamer--empty-prefix)
-                     (blamer--format commit))))
-        (when bg
-          (add-face-text-property 0 (length text)
-                                  `(:background ,bg)
-                                  nil text))
-        (blamer--add-overlay lineno text commit)
+             (show-prefix (not (equal hash prev-hash))))
+        (blamer--add-overlay lineno commit show-prefix)
         (setq prev-hash hash)))))
 
 (defun blamer--run-blame (file)
@@ -361,7 +467,8 @@ and also attached to STRING as `help-echo' text for mouse tooltips."
              (file-exists-p buffer-file-name)
              (blamer--inside-worktree-p))
     (when-let ((entries (blamer--run-blame buffer-file-name)))
-      (blamer--render entries))))
+      (blamer--render entries)
+      (blamer--update-visible-layout))))
 
 (defun blamer--schedule-refresh (&rest _)
   "Schedule a blame refresh after `blamer-idle-delay' seconds."
@@ -485,6 +592,9 @@ and also attached to STRING as `help-echo' text for mouse tooltips."
 
 (defun blamer--post-command ()
   "Trigger or hide the blame popup based on the current point context."
+  (when (and (bound-and-true-p blamer-mode)
+             (eq (window-buffer (selected-window)) (current-buffer)))
+    (blamer--update-visible-layout (selected-window)))
   (when (timerp blamer--popup-timer)
     (cancel-timer blamer--popup-timer)
     (setq blamer--popup-timer nil))
@@ -500,11 +610,28 @@ and also attached to STRING as `help-echo' text for mouse tooltips."
 (defvar blamer--post-command-installed nil
   "Non-nil once `blamer--post-command' has been added to the global hook.")
 
+(defvar blamer--window-scroll-installed nil
+  "Non-nil once the global window-scroll hook has been installed.")
+
 (defun blamer--install-post-command ()
   "Install the global post-command hook lazily."
   (unless blamer--post-command-installed
     (add-hook 'post-command-hook #'blamer--post-command)
     (setq blamer--post-command-installed t)))
+
+(defun blamer--window-scroll (window _display-start)
+  "Re-align visible blamer overlays after window scrolling."
+  (when (window-live-p window)
+    (with-current-buffer (window-buffer window)
+      (when (bound-and-true-p blamer-mode)
+        (setq blamer--layout-cache nil)
+        (blamer--update-visible-layout window)))))
+
+(defun blamer--install-window-scroll ()
+  "Install the global window-scroll hook lazily."
+  (unless blamer--window-scroll-installed
+    (add-hook 'window-scroll-functions #'blamer--window-scroll)
+    (setq blamer--window-scroll-installed t)))
 
 ;;;###autoload
 (define-minor-mode blamer-mode
@@ -516,6 +643,7 @@ and also attached to STRING as `help-echo' text for mouse tooltips."
     (add-hook 'after-save-hook #'blamer--schedule-refresh nil t)
     (add-hook 'after-revert-hook #'blamer--schedule-refresh nil t)
     (blamer--install-post-command)
+    (blamer--install-window-scroll)
     (blamer--refresh))
    (t
     (remove-hook 'after-save-hook #'blamer--schedule-refresh t)

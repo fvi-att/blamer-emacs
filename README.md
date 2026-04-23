@@ -6,16 +6,19 @@ background color, and a child-frame popup shows the full commit detail
 when the cursor lands on a blamed line.
 
 ```
-26-04-23 initial …  │ #!/usr/bin/env bash
-                    │ # previous banner
-26-04-23 refactor … │ set -euo pipefail
-                    │
-26-04-23 fix edge … │ cleanup() {
-                    │   rm -f "${tmp:-}"
-                    │ }
+26-04-23 alice │ #!/usr/bin/env bash
+               │ # previous banner
+26-04-23 bob   │ set -euo pipefail
+               │
+26-04-23 alice │ cleanup() {
+               │   rm -f "${tmp:-}"
+               │ }
 ```
 
-The blame prefix stays compact: **commit date + short summary**. Full
+The blame prefix stays compact by default: **commit date + author**.
+You can change the visible inline columns from `M-x customize-group RET
+blamer`, and the inline area widens or shrinks to the longest visible
+value in the current window instead of reserving a fixed width. Full
 details (author, timestamp, 12-char hash, summary) appear in a popup or
 echo area when you move point into the chunk.
 
@@ -96,16 +99,20 @@ RET blamer`).
 
 | Variable                     | Default       | Meaning                                         |
 |------------------------------|---------------|-------------------------------------------------|
-| `blamer-comment-max-length`  | `10`          | Max width of the inline summary column.         |
+| `blamer-inline-columns`      | `(date author)` | Ordered inline columns to render.             |
+| `blamer-comment-max-length`  | `10`          | Max inline summary width before truncation.     |
 | `blamer-date-format`         | `"%y-%m-%d"`  | `format-time-string` spec for the inline date.  |
 | `blamer-separator`           | `" │ "`       | Glyph between blame prefix and source.          |
 | `blamer-uncommitted-label`   | `"Uncommitted"` | Label shown for uncommitted lines.            |
 | `blamer-uncommitted-summary` | `"(not yet committed)"` | Summary text for uncommitted lines.   |
-| `blamer-author-max-length`   | `5`           | Reserved — kept for forward compatibility.      |
-| `blamer-hash-length`         | `6`           | Reserved — kept for forward compatibility.      |
+| `blamer-author-max-length`   | `5`           | Max inline author width before truncation.      |
+| `blamer-hash-length`         | `6`           | Max inline hash width before truncation.        |
 
-The inline prefix intentionally shows only `date summary` to stay out of
-the way. Full metadata lives in the popup.
+`blamer-inline-columns` accepts any ordered combination of `author`,
+`date`, `summary`, and `hash`. The default stays intentionally small,
+but you can expose more metadata inline when needed. The separator
+position follows the longest visible value in the current window, so the
+blame gutter grows and shrinks as you scroll.
 
 ### Chunk background color
 
@@ -144,10 +151,10 @@ contrast is a one-liner:
 | Face                     | Purpose                                  |
 |--------------------------|------------------------------------------|
 | `blamer-face`            | Base face (inherits `shadow`).           |
-| `blamer-author-face`     | Author column (unused by default inline). |
+| `blamer-author-face`     | Author column.                           |
 | `blamer-date-face`       | Date column.                             |
 | `blamer-comment-face`    | Summary column.                          |
-| `blamer-hash-face`       | Hash column (unused by default inline). |
+| `blamer-hash-face`       | Hash column.                             |
 | `blamer-separator-face`  | The `│` glyph.                           |
 
 ### Recipe: compact dark theme
@@ -155,9 +162,18 @@ contrast is a one-liner:
 ```elisp
 (setq blamer-comment-max-length 8
       blamer-date-format "%m-%d"
+      blamer-inline-columns '(date summary)
       blamer-background-saturation 0.25
       blamer-background-lightness 0.2)
 (set-face-attribute 'blamer-face nil :height 0.55)
+```
+
+### Recipe: show author + hash inline
+
+```elisp
+(setq blamer-inline-columns '(author date hash summary)
+      blamer-author-max-length 10
+      blamer-hash-length 8)
 ```
 
 ### Recipe: light theme
