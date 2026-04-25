@@ -284,7 +284,10 @@ light themes."
 
 (defun blamee--format-prefix (columns widths &optional blank)
   "Render inline prefix from COLUMNS aligned to WIDTHS.
-When BLANK is non-nil, render only spacing with the same total width."
+When BLANK is non-nil, render only spacing with the same total width.
+The literal separator string is rendered on every line so prefix and
+spacer rows have identical pixel width regardless of font fallbacks
+for the separator's glyph."
   (let ((parts nil))
     (dolist (column blamee-inline-columns)
       (let ((target-width (alist-get column widths 0 nil #'eq)))
@@ -297,10 +300,8 @@ When BLANK is non-nil, render only spacing with the same total width."
     (setq parts (nreverse parts))
     (if parts
         (concat (string-join parts " ")
-                (if blank
-                    (make-string (string-width blamee-separator) ?\s)
-                  (propertize blamee-separator
-                              'face 'blamee-separator-face)))
+                (propertize blamee-separator
+                            'face 'blamee-separator-face))
       "")))
 
 (defun blamee--format-detail (commit)
@@ -413,9 +414,10 @@ duplicate mode activations are also removed."
   (setq blamee--overlays nil
         blamee--layout-cache nil))
 
-(defun blamee--add-overlay (lineno commit show-prefix)
+(defun blamee--add-overlay (lineno commit show-prefix columns)
   "Attach a blamee overlay at line LINENO for COMMIT.
-SHOW-PREFIX is non-nil when this line starts a visible blame chunk."
+SHOW-PREFIX is non-nil when this line starts a visible blame chunk.
+COLUMNS is the rendered inline column alist for COMMIT."
   (save-excursion
     (goto-char (point-min))
     (forward-line (1- lineno))
@@ -423,8 +425,7 @@ SHOW-PREFIX is non-nil when this line starts a visible blame chunk."
                             (line-beginning-position)
                             nil t nil))
           (detail (blamee--format-detail commit))
-          (bg (blamee--commit-background (plist-get commit :hash)))
-          (columns (blamee--inline-columns commit)))
+          (bg (blamee--commit-background (plist-get commit :hash))))
       (overlay-put ov 'before-string "")
       (overlay-put ov 'blamee t)
       (overlay-put ov 'blamee-commit commit)
@@ -442,8 +443,9 @@ SHOW-PREFIX is non-nil when this line starts a visible blame chunk."
       (let* ((lineno (car entry))
              (commit (cdr entry))
              (hash (plist-get commit :hash))
+             (columns (blamee--inline-columns commit))
              (show-prefix (not (equal hash prev-hash))))
-        (blamee--add-overlay lineno commit show-prefix)
+        (blamee--add-overlay lineno commit show-prefix columns)
         (setq prev-hash hash)))))
 
 (defun blamee--run-blame (file)
