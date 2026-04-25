@@ -1,5 +1,7 @@
 # blamee.el
 
+![blamee.el sample](img/sample.png)
+
 Chunked `git blame` overlays for Emacs, rendered between the line numbers
 and the source text. Each commit chunk is painted with its own subtle
 background color, and a child-frame popup shows the full commit detail
@@ -141,12 +143,18 @@ commit keeps the same tint across sessions and files.
 
 ### Faces
 
-All inline columns inherit from `blamee-face`, so tuning font size or
-contrast is a one-liner:
+All inline columns inherit from `blamee-face`, so tuning contrast is a
+one-liner:
 
 ```elisp
-(set-face-attribute 'blamee-face nil :height 0.55)
+(set-face-attribute 'blamee-face nil :foreground "gray60")
 ```
+
+> **Note:** avoid scaling `blamee-face` via `:height` below `1.0`.
+> Emacs draws the per-commit background rectangle at the reduced glyph
+> height for non-space characters while runs of spaces still fill the
+> full line height, so the colored chunk bar ends up unevenly sized
+> across same-commit lines.
 
 | Face                     | Purpose                                  |
 |--------------------------|------------------------------------------|
@@ -165,7 +173,6 @@ contrast is a one-liner:
       blamee-inline-columns '(date summary)
       blamee-background-saturation 0.25
       blamee-background-lightness 0.2)
-(set-face-attribute 'blamee-face nil :height 0.55)
 ```
 
 ### Recipe: show author + hash inline
