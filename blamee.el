@@ -2,8 +2,8 @@
 
 ;; Copyright (C) 2026 fvi-att
 
-;; Author: fvi-att
-;; Maintainer: fvi-att
+;; Author: fvi-att <jshimizujp@gmail.com>
+;; Maintainer: fvi-att <jshimizujp@gmail.com>
 ;; Version: 0.1.0
 ;; Package-Requires: ((emacs "27.1"))
 ;; Keywords: tools, vc, git
@@ -378,7 +378,7 @@ Return a list of (LINENO . COMMIT-PLIST) pairs sorted by LINENO."
     (while (not (eobp))
       (unless (looking-at
                "^\\([0-9a-f]\\{40\\}\\) [0-9]+ \\([0-9]+\\)\\(?: [0-9]+\\)?$")
-        (error "blamee: unexpected porcelain line: %s"
+        (error "Blamee: unexpected porcelain line: %s"
                (buffer-substring-no-properties
                 (point) (line-end-position))))
       (let* ((hash (match-string 1))
@@ -622,7 +622,7 @@ COLUMNS is the rendered inline column alist for COMMIT."
     (setq blamee--post-command-installed t)))
 
 (defun blamee--window-scroll (window _display-start)
-  "Re-align visible blamee overlays after window scrolling."
+  "Re-align visible blamee overlays in WINDOW after scrolling."
   (when (window-live-p window)
     (with-current-buffer (window-buffer window)
       (when (bound-and-true-p blamee-mode)
@@ -682,7 +682,7 @@ COLUMNS is the rendered inline column alist for COMMIT."
   (interactive)
   (if blamee-mode
       (blamee--refresh)
-    (user-error "blamee-mode is not enabled in this buffer")))
+    (user-error "Blamee-mode is not enabled in this buffer")))
 
 (defun blamee--maybe-enable ()
   "Turn on `blamee-mode' when the buffer visits a file inside a git worktree."
