@@ -105,7 +105,7 @@ Supported column symbols are `author', `date', `summary' and `hash'."
   :set #'blamee--set-and-refresh
   :group 'blamee)
 
-(defcustom blamee-separator " │ "
+(defcustom blamee-separator " │"
   "String used to separate the blame prefix from the source line."
   :type 'string
   :set #'blamee--set-and-refresh
@@ -301,7 +301,8 @@ for the separator's glyph."
     (if parts
         (concat (string-join parts " ")
                 (propertize blamee-separator
-                            'face 'blamee-separator-face))
+                            'face 'blamee-separator-face)
+                " ")
       "")))
 
 (defun blamee--format-detail (commit)
@@ -344,12 +345,13 @@ for the separator's glyph."
                   columns widths
                   (not (overlay-get overlay 'blamee-show-prefix)))))
     (when (> (length string) 0)
-      (add-face-text-property 0 (length string) 'blamee-face t string)
-      (put-text-property 0 (length string) 'help-echo detail string)
-      (when bg
-        (add-face-text-property 0 (length string)
-                                `(:background ,bg)
-                                nil string)))
+      (let ((face-end (max 0 (1- (length string)))))
+        (add-face-text-property 0 face-end 'blamee-face t string)
+        (put-text-property 0 (length string) 'help-echo detail string)
+        (when bg
+          (add-face-text-property 0 face-end
+                                  `(:background ,bg)
+                                  nil string))))
     (overlay-put overlay 'before-string string)))
 
 (defun blamee--update-visible-layout (&optional window)
