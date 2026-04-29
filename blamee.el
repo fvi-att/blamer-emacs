@@ -189,6 +189,15 @@ light themes."
 (defvar-local blamee--layout-cache nil
   "Cached visible-layout signature for the current buffer.")
 
+(defvar-local blamee--saved-buffer-read-only nil
+  "Value of `buffer-read-only' before enabling `blamee-mode'.")
+
+(defvar-local blamee--read-only-workaround-active nil
+  "Non-nil when `blamee-mode' has made the buffer read-only.")
+
+(put 'blamee--saved-buffer-read-only 'permanent-local t)
+(put 'blamee--read-only-workaround-active 'permanent-local t)
+
 (defconst blamee--zero-hash (make-string 40 ?0)
   "Pseudo hash git uses for uncommitted lines.")
 
@@ -637,6 +646,24 @@ COLUMNS is the rendered inline column alist for COMMIT."
     (add-hook 'window-scroll-functions #'blamee--window-scroll)
     (setq blamee--window-scroll-installed t)))
 
+(defun blamee--enable-read-only-workaround ()
+  "Make the current buffer read-only while `blamee-mode' is active."
+  (unless blamee--read-only-workaround-active
+    (add-hook 'change-major-mode-hook
+              #'blamee--disable-read-only-workaround nil t)
+    (setq blamee--saved-buffer-read-only buffer-read-only
+          blamee--read-only-workaround-active t
+          buffer-read-only t)))
+
+(defun blamee--disable-read-only-workaround ()
+  "Restore `buffer-read-only' after `blamee-mode' is disabled."
+  (when blamee--read-only-workaround-active
+    (remove-hook 'change-major-mode-hook
+                 #'blamee--disable-read-only-workaround t)
+    (setq buffer-read-only blamee--saved-buffer-read-only
+          blamee--saved-buffer-read-only nil
+          blamee--read-only-workaround-active nil)))
+
 ;;;###autoload
 (define-minor-mode blamee-mode
   "Show git blame information for the current file grouped by chunks."
@@ -648,10 +675,12 @@ COLUMNS is the rendered inline column alist for COMMIT."
     (add-hook 'after-revert-hook #'blamee--schedule-refresh nil t)
     (blamee--install-post-command)
     (blamee--install-window-scroll)
+    (blamee--enable-read-only-workaround)
     (blamee--refresh))
    (t
     (remove-hook 'after-save-hook #'blamee--schedule-refresh t)
     (remove-hook 'after-revert-hook #'blamee--schedule-refresh t)
+    (blamee--disable-read-only-workaround)
     (when (timerp blamee--refresh-timer)
       (cancel-timer blamee--refresh-timer)
       (setq blamee--refresh-timer nil))

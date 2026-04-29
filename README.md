@@ -214,6 +214,9 @@ working even with the popup off.
 
 ## Limitations / notes
 
+- Workaround: `blamee-mode` currently makes the buffer read-only while
+  enabled to avoid editing conflicts with the inline overlay layout.
+  Disable `blamee-mode` before editing.
 - Blame is computed against the **on-disk** file; unsaved changes are
   ignored until the next save.
 - Files not yet committed are labeled as `Uncommitted` with no background
