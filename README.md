@@ -214,11 +214,10 @@ working even with the popup off.
 
 ## Limitations / notes
 
-- Workaround: `blamee-mode` currently makes the buffer read-only while
-  enabled to avoid editing conflicts with the inline overlay layout.
-  Disable `blamee-mode` before editing.
 - Blame is computed against the **on-disk** file; unsaved changes are
-  ignored until the next save.
+  ignored until the next save. Lines you have just inserted receive a
+  zero-width placeholder overlay so the inline gutter stays aligned
+  while you edit, and the real blame is recomputed on save.
 - Files not yet committed are labeled as `Uncommitted` with no background
   color.
 - The popup uses Emacs child frames (requires `display-graphic-p`).
@@ -231,9 +230,16 @@ working even with the popup off.
 ```sh
 # Byte-compile (also runs as a lint)
 emacs -Q --batch -L . -f batch-byte-compile blamee.el
+
+# Run the ERT test suite (requires git on PATH)
+emacs -Q --batch -L . -L tests -l tests/blamee-test.el \
+      -f ert-run-tests-batch-and-exit
 ```
 
-No tests yet. Contributions welcome.
+The tests under `tests/` build a throwaway git repository and assert
+that the inline blame gutter stays aligned across inserts, deletes and
+in-line edits — the property the `blamee-mode` activation no longer
+enforces by making the buffer read-only.
 
 ## License
 

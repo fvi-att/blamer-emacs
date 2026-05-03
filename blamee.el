@@ -1,10 +1,9 @@
 ;;; blamee.el --- Chunked git-blame overlays with popup details -*- lexical-binding: t; -*-
-
 ;; Copyright (C) 2026 fvi-att
 
 ;; Author: fvi-att <jshimizujp@gmail.com>
 ;; Maintainer: fvi-att <jshimizujp@gmail.com>
-;; Version: 0.1.0
+;; Version:1.0.3
 ;; Package-Requires: ((emacs "27.1"))
 ;; Keywords: tools, vc, git
 ;; URL: https://github.com/fvi-att/blamee
@@ -189,31 +188,43 @@ light themes."
 (defvar-local blamee--layout-cache nil
   "Cached visible-layout signature for the current buffer.")
 
-(defvar-local blamee--saved-buffer-read-only nil
-  "Value of `buffer-read-only' before enabling `blamee-mode'.")
-
-(defvar-local blamee--read-only-workaround-active nil
-  "Non-nil when `blamee-mode' has made the buffer read-only.")
-
-(put 'blamee--saved-buffer-read-only 'permanent-local t)
-(put 'blamee--read-only-workaround-active 'permanent-local t)
-
 (defconst blamee--zero-hash (make-string 40 ?0)
   "Pseudo hash git uses for uncommitted lines.")
+
+(defconst blamee--modified-hash (make-string 40 ?1)
+  "Pseudo hash blamee uses for placeholder overlays on locally-edited lines.")
+
+(defconst blamee--modified-commit
+  (list :hash blamee--modified-hash
+        :author ""
+        :author-time nil
+        :summary ""
+        :modified t)
+  "Pseudo-commit attached to placeholder overlays.
+Placeholder overlays are added on lines that have no `git blame'
+information yet (typically lines the user has just inserted) so the
+inline blame gutter keeps its width and the source text stays aligned
+until the next save triggers a real refresh.")
 
 (defun blamee--uncommitted-p (commit)
   "Return non-nil when COMMIT represents an uncommitted line."
   (equal (plist-get commit :hash) blamee--zero-hash))
 
-(defun blamee--commit-background (hash)
-  "Return a stable hex color for HASH, or nil for uncommitted lines."
-  (unless (equal hash blamee--zero-hash)
-    (let* ((seed (string-to-number (substring hash 0 6) 16))
-           (hue (/ (float (mod seed 360)) 360.0))
-           (rgb (color-hsl-to-rgb hue
-                                  blamee-background-saturation
-                                  blamee-background-lightness)))
-      (apply #'color-rgb-to-hex (append rgb '(2))))))
+(defun blamee--modified-p (commit)
+  "Return non-nil when COMMIT is the placeholder pseudo-commit."
+  (plist-get commit :modified))
+
+(defun blamee--commit-background (commit)
+  "Return a stable hex color for COMMIT, or nil for non-real commits."
+  (let ((hash (plist-get commit :hash)))
+    (unless (or (equal hash blamee--zero-hash)
+                (blamee--modified-p commit))
+      (let* ((seed (string-to-number (substring hash 0 6) 16))
+             (hue (/ (float (mod seed 360)) 360.0))
+             (rgb (color-hsl-to-rgb hue
+                                    blamee-background-saturation
+                                    blamee-background-lightness)))
+        (apply #'color-rgb-to-hex (append rgb '(2)))))))
 
 (defun blamee--inside-worktree-p ()
   "Return non-nil when the current buffer's file is inside a git worktree."
@@ -316,6 +327,9 @@ for the separator's glyph."
 
 (defun blamee--format-detail (commit)
   "Return a multi-line human-readable COMMIT summary for the popup."
+  (if (blamee--modified-p commit)
+      (concat (propertize "Local edit" 'face 'bold) "\n"
+              "(unsaved — save the buffer to refresh blame)")
   (let* ((hash (plist-get commit :hash))
          (uncommitted (blamee--uncommitted-p commit))
          (author (if uncommitted
@@ -335,7 +349,7 @@ for the separator's glyph."
      (propertize "Commit: " 'face 'bold) short "\n"
      (propertize (make-string (min blamee-popup-max-width 40) ?─)
                  'face 'shadow) "\n"
-     summary)))
+     summary))))
 
 (defun blamee--visible-overlays (window)
   "Return blamee overlays visible in WINDOW."
@@ -372,6 +386,8 @@ When WINDOW is nil, use the selected window if it shows the current buffer."
                          (selected-window)))))
     (when (and (window-live-p window)
                (eq (window-buffer window) (current-buffer)))
+      (blamee--ensure-coverage (window-start window)
+                               (or (window-end window t) (point-max)))
       (let* ((overlays (blamee--visible-overlays window))
              (widths (blamee--column-widths-for overlays))
              (signature (list window blamee-inline-columns widths)))
@@ -425,6 +441,35 @@ duplicate mode activations are also removed."
   (setq blamee--overlays nil
         blamee--layout-cache nil))
 
+(defun blamee--add-overlay-at-point (commit show-prefix columns &optional placeholder)
+  "Attach a blamee overlay at the current line's beginning.
+COMMIT is a commit plist, SHOW-PREFIX non-nil paints the prefix on the
+first chunk line, COLUMNS is the rendered inline column alist, and
+PLACEHOLDER non-nil marks the overlay as a coverage placeholder for an
+unsaved local edit."
+  (let* ((bol (line-beginning-position))
+         (ov (make-overlay bol bol nil t t))
+         (detail (blamee--format-detail commit))
+         (bg (blamee--commit-background commit)))
+    (overlay-put ov 'before-string "")
+    (overlay-put ov 'blamee t)
+    (overlay-put ov 'blamee-commit commit)
+    (overlay-put ov 'blamee-columns columns)
+    (overlay-put ov 'blamee-column-widths
+                 (if placeholder
+                     ;; Placeholders contribute zero width so they never
+                     ;; inflate the inline gutter beyond the real entries.
+                     (mapcar (lambda (col) (cons col 0))
+                             blamee-inline-columns)
+                   (blamee--inline-widths columns)))
+    (overlay-put ov 'blamee-show-prefix show-prefix)
+    (overlay-put ov 'blamee-background bg)
+    (overlay-put ov 'help-echo detail)
+    (when placeholder
+      (overlay-put ov 'blamee-placeholder t))
+    (push ov blamee--overlays)
+    ov))
+
 (defun blamee--add-overlay (lineno commit show-prefix columns)
   "Attach a blamee overlay at line LINENO for COMMIT.
 SHOW-PREFIX is non-nil when this line starts a visible blame chunk.
@@ -432,20 +477,87 @@ COLUMNS is the rendered inline column alist for COMMIT."
   (save-excursion
     (goto-char (point-min))
     (forward-line (1- lineno))
-    (let ((ov (make-overlay (line-beginning-position)
-                            (line-beginning-position)
-                            nil t nil))
-          (detail (blamee--format-detail commit))
-          (bg (blamee--commit-background (plist-get commit :hash))))
-      (overlay-put ov 'before-string "")
-      (overlay-put ov 'blamee t)
-      (overlay-put ov 'blamee-commit commit)
-      (overlay-put ov 'blamee-columns columns)
-      (overlay-put ov 'blamee-column-widths (blamee--inline-widths columns))
-      (overlay-put ov 'blamee-show-prefix show-prefix)
-      (overlay-put ov 'blamee-background bg)
-      (overlay-put ov 'help-echo detail)
-      (push ov blamee--overlays))))
+    (blamee--add-overlay-at-point commit show-prefix columns)))
+
+(defun blamee--line-has-overlay-p ()
+  "Return non-nil when the current line already carries a blamee overlay."
+  (let ((bol (line-beginning-position)))
+    (seq-some (lambda (o) (overlay-get o 'blamee))
+              (overlays-in bol (1+ bol)))))
+
+(defun blamee--add-placeholder-at-point ()
+  "Add a coverage placeholder overlay at the current line."
+  (let* ((commit blamee--modified-commit)
+         (columns (blamee--inline-columns commit)))
+    (blamee--add-overlay-at-point commit nil columns t)))
+
+(defun blamee--ensure-coverage (beg end)
+  "Ensure every line in [BEG, END) carries a blamee overlay.
+Lines that have none receive a placeholder overlay so the inline blame
+gutter keeps its width and the source code stays aligned even while the
+user is mid-edit and `git blame' has not yet been re-run.
+Returns non-nil when at least one placeholder was added."
+  (let ((added nil))
+    (save-excursion
+      (goto-char (max (point-min) beg))
+      (let ((stop (min (point-max) end)))
+        (while (and (<= (point) stop) (not (eobp)))
+          (unless (blamee--line-has-overlay-p)
+            (blamee--add-placeholder-at-point)
+            (setq added t))
+          (forward-line 1))))
+    (when added
+      (setq blamee--layout-cache nil))
+    added))
+
+(defun blamee--realign-overlays (beg end)
+  "Snap blamee overlays in [BEG, END] back to their line-beginning-position.
+Zero-width overlays drift mid-line when the user inserts text at column
+0 (the marker advances past the new characters), which would push the
+blame prefix into the middle of the line.  Repositioning to BOL after
+every change keeps the inline gutter glued to the left edge."
+  (save-excursion
+    (goto-char (max (point-min) beg))
+    (let ((stop (min (point-max) end))
+          (moved nil))
+      (while (and (<= (point) stop) (not (eobp)))
+        (let* ((bol (line-beginning-position))
+               (eol (line-end-position))
+               (ovs (seq-filter (lambda (o) (overlay-get o 'blamee))
+                                (overlays-in bol (1+ eol)))))
+          (dolist (ov ovs)
+            (unless (and (= (overlay-start ov) bol)
+                         (= (overlay-end ov) bol))
+              (move-overlay ov bol bol)
+              (setq moved t))))
+        (forward-line 1))
+      (when moved
+        (setq blamee--layout-cache nil)))))
+
+(defun blamee--dedupe-line-overlays (beg end)
+  "Drop duplicate blamee overlays on each line in [BEG, END).
+Deleting a line collapses its zero-width overlay onto the next line;
+left alone, that doubles the inline prefix.  Keep one real overlay per
+line (preferring a non-placeholder one) and remove the rest."
+  (save-excursion
+    (goto-char (max (point-min) beg))
+    (let ((stop (min (point-max) end)))
+      (while (and (<= (point) stop) (not (eobp)))
+        (let* ((bol (line-beginning-position))
+               (ovs (seq-filter (lambda (o) (overlay-get o 'blamee))
+                                (overlays-in bol (1+ bol)))))
+          (when (> (length ovs) 1)
+            (let ((keep (or (seq-find
+                             (lambda (o)
+                               (not (overlay-get o 'blamee-placeholder)))
+                             ovs)
+                            (car ovs))))
+              (dolist (ov ovs)
+                (unless (eq ov keep)
+                  (setq blamee--overlays (delq ov blamee--overlays))
+                  (delete-overlay ov)))
+              (setq blamee--layout-cache nil))))
+        (forward-line 1)))))
 
 (defun blamee--render (entries)
   "Create overlays for ENTRIES, a list of (LINENO . COMMIT-PLIST)."
@@ -646,23 +758,23 @@ COLUMNS is the rendered inline column alist for COMMIT."
     (add-hook 'window-scroll-functions #'blamee--window-scroll)
     (setq blamee--window-scroll-installed t)))
 
-(defun blamee--enable-read-only-workaround ()
-  "Make the current buffer read-only while `blamee-mode' is active."
-  (unless blamee--read-only-workaround-active
-    (add-hook 'change-major-mode-hook
-              #'blamee--disable-read-only-workaround nil t)
-    (setq blamee--saved-buffer-read-only buffer-read-only
-          blamee--read-only-workaround-active t
-          buffer-read-only t)))
-
-(defun blamee--disable-read-only-workaround ()
-  "Restore `buffer-read-only' after `blamee-mode' is disabled."
-  (when blamee--read-only-workaround-active
-    (remove-hook 'change-major-mode-hook
-                 #'blamee--disable-read-only-workaround t)
-    (setq buffer-read-only blamee--saved-buffer-read-only
-          blamee--saved-buffer-read-only nil
-          blamee--read-only-workaround-active nil)))
+(defun blamee--after-change (beg end len)
+  "Keep the inline gutter aligned across BEG..END after a buffer change.
+LEN is the pre-change length of the replaced region.  Deletions
+(`LEN' > 0) can collapse multiple zero-width overlays onto the same
+line, so dedupe them; insertions can leave new lines uncovered, so
+backfill placeholders.  In all cases re-run the visible layout pass."
+  (when (bound-and-true-p blamee-mode)
+    (setq blamee--layout-cache nil)
+    (let ((line-beg (save-excursion (goto-char beg)
+                                    (line-beginning-position)))
+          (line-end (save-excursion (goto-char (min end (point-max)))
+                                    (line-end-position))))
+      (blamee--realign-overlays line-beg line-end)
+      (when (> len 0)
+        (blamee--dedupe-line-overlays line-beg line-end))
+      (blamee--ensure-coverage line-beg line-end)
+      (blamee--update-visible-layout))))
 
 ;;;###autoload
 (define-minor-mode blamee-mode
@@ -673,14 +785,14 @@ COLUMNS is the rendered inline column alist for COMMIT."
    (blamee-mode
     (add-hook 'after-save-hook #'blamee--schedule-refresh nil t)
     (add-hook 'after-revert-hook #'blamee--schedule-refresh nil t)
+    (add-hook 'after-change-functions #'blamee--after-change nil t)
     (blamee--install-post-command)
     (blamee--install-window-scroll)
-    (blamee--enable-read-only-workaround)
     (blamee--refresh))
    (t
     (remove-hook 'after-save-hook #'blamee--schedule-refresh t)
     (remove-hook 'after-revert-hook #'blamee--schedule-refresh t)
-    (blamee--disable-read-only-workaround)
+    (remove-hook 'after-change-functions #'blamee--after-change t)
     (when (timerp blamee--refresh-timer)
       (cancel-timer blamee--refresh-timer)
       (setq blamee--refresh-timer nil))
