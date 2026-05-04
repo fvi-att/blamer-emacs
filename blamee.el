@@ -371,6 +371,7 @@ for the separator's glyph."
       (let ((face-end (max 0 (1- (length string)))))
         (add-face-text-property 0 face-end 'blamee-face t string)
         (put-text-property 0 (length string) 'help-echo detail string)
+        (put-text-property 0 (length string) 'cursor 0 string)
         (when bg
           (add-face-text-property 0 face-end
                                   `(:background ,bg)
